@@ -560,7 +560,7 @@ class EJBClientChannel {
             if (ir == null) throw Logs.TXN.cannotEnlistTx();
             final int id = ir.getTransactionId(channel.getConnection());
             dataOutput.writeInt(id);
-            PackedInteger.writePackedInteger(dataOutput, remoteTransaction.getEstimatedRemainingTime());
+            PackedInteger.writePackedInteger(dataOutput, Math.max(1, remoteTransaction.getEstimatedRemainingTime()));
             return null;
         } else if (transaction instanceof LocalTransaction) {
             final LocalTransaction localTransaction = (LocalTransaction) transaction;
@@ -575,7 +575,7 @@ class EJBClientChannel {
             // this will normally be zero, but write it anyway just in case we need to change it later
             dataOutput.writeByte(bq.length);
             dataOutput.write(bq);
-            PackedInteger.writePackedInteger(dataOutput, outflowHandle.getRemainingTime());
+            PackedInteger.writePackedInteger(dataOutput, Math.max(1, outflowHandle.getRemainingTime()));
             return outflowHandle;
         } else {
             throw Logs.TXN.cannotEnlistTx();
