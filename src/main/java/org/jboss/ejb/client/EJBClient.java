@@ -1,5 +1,5 @@
 /*
- * JBoss, Home of Professional Open Source.
+f * JBoss, Home of Professional Open Source.
  * Copyright 2017 Red Hat, Inc., and individual contributors
  * as indicated by the @author tags.
  *

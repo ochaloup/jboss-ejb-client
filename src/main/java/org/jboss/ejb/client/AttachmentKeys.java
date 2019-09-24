@@ -25,6 +25,8 @@ import javax.transaction.Transaction;
 
 import org.jboss.ejb.client.annotation.CompressionHint;
 
+import io.opentracing.SpanContext;
+
 /**
  * Commonly-used attachment keys.
  *
@@ -39,6 +41,11 @@ public final class AttachmentKeys {
      */
     public static final AttachmentKey<Transaction> TRANSACTION_KEY = new AttachmentKey<>();
 
+    /**
+     * Key used for opentracing API span context propagation.
+     */
+    public static final AttachmentKey<SpanContext> TRACING_KEY = new AttachmentKey<>();
+    
     /**
      * The preferred node or cluster for invocations from this proxy.  Note that this name is only a
      * recommendation and is not required to be used, and if the node or cluster is not available then the invocation

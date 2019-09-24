@@ -38,6 +38,9 @@ import org.wildfly.common.Assert;
 import org.wildfly.discovery.Discovery;
 import org.wildfly.security.auth.client.AuthenticationContext;
 
+import io.opentracing.Span;
+import io.opentracing.util.GlobalTracer;
+
 import static java.security.AccessController.doPrivileged;
 
 /**
@@ -183,9 +186,9 @@ final class EJBInvocationHandler<T> extends Attachable implements InvocationHand
         invocationContext.setWeakAffinity(getWeakAffinity());
 
         try {
+            Span span = GlobalTracer.get().activeSpan();
             // send the request
             invocationContext.sendRequestInitial();
-
             if (! async && ! methodInfo.isClientAsync()) {
                 // wait for invocation to complete
                 return invocationContext.awaitResponse();
