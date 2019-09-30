@@ -1,5 +1,5 @@
 /*
- * JBoss, Home of Professional Open Source.
+x * JBoss, Home of Professional Open Source.
  * Copyright 2017 Red Hat, Inc., and individual contributors
  * as indicated by the @author tags.
  *
@@ -32,11 +32,15 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.net.Inet6Address;
 import java.net.SocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.security.PrivilegedAction;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.concurrent.Executor;
 import java.util.zip.Deflater;
 import java.util.zip.DeflaterOutputStream;
@@ -68,6 +72,7 @@ import org.jboss.ejb.client.TransactionID;
 import org.jboss.ejb.client.UserTransactionID;
 import org.jboss.ejb.client.XidTransactionID;
 import org.jboss.ejb.client.annotation.CompressionHint;
+import org.jboss.ejb.protocol.remote.tracing.SpanCodec;
 import org.jboss.ejb.server.Association;
 import org.jboss.ejb.server.CancelHandle;
 import org.jboss.ejb.server.ClusterTopologyListener;
@@ -100,6 +105,12 @@ import org.wildfly.transaction.client.SimpleXid;
 import org.wildfly.transaction.client.provider.remoting.RemotingTransactionServer;
 import org.wildfly.transaction.client.spi.SubordinateTransactionControl;
 
+import io.opentracing.SpanContext;
+import io.opentracing.propagation.Binary;
+import io.opentracing.propagation.BinaryAdapters;
+import io.opentracing.propagation.Format;
+import io.opentracing.util.GlobalTracer;
+
 /**
  * @author <a href="mailto:david.lloyd@redhat.com">David M. Lloyd</a>
  * @author <a href="mailto:tadamski@redhat.com">Tomasz Adamski</a>
@@ -118,7 +129,8 @@ final class EJBServerChannel {
     private final MarshallingConfiguration configuration;
     private final IntIndexHashMap<InProgress> invocations = new IntIndexHashMap<>(InProgress::getInvId);
 
-    EJBServerChannel(final RemotingTransactionServer transactionServer, final Channel channel, final int version, final MessageTracker messageTracker) {
+    EJBServerChannel(final RemotingTransactionServer transactionServer, final Channel channel, final int version,
+            final MessageTracker messageTracker) {
         this.transactionServer = transactionServer;
         this.channel = channel;
         this.version = version;
@@ -138,7 +150,8 @@ final class EJBServerChannel {
         this.configuration = configuration;
     }
 
-    Channel.Receiver getReceiver(final Association association, final ListenerHandle handle1, final ListenerHandle handle2) {
+    Channel.Receiver getReceiver(final Association association, final ListenerHandle handle1,
+            final ListenerHandle handle2) {
         return new ReceiverImpl(association, handle1, handle2);
     }
 
@@ -187,73 +200,80 @@ final class EJBServerChannel {
             try {
                 final int code = message.readUnsignedByte();
                 switch (code) {
-                    case Protocol.COMPRESSED_INVOCATION_MESSAGE:
-                    case Protocol.INVOCATION_REQUEST: {
-                        try (InputStream input = code == Protocol.COMPRESSED_INVOCATION_MESSAGE ? new InflaterInputStream(message) : message) {
-                            // now if we get an error, we can respond.
-                            if(code == Protocol.COMPRESSED_INVOCATION_MESSAGE) {
-                                int verify = input.read();
-                                if(verify != Protocol.INVOCATION_REQUEST) {
-                                    throw new RuntimeException();
-                                }
+                case Protocol.COMPRESSED_INVOCATION_MESSAGE:
+                case Protocol.INVOCATION_REQUEST: {
+                    try (InputStream input = code == Protocol.COMPRESSED_INVOCATION_MESSAGE
+                            ? new InflaterInputStream(message)
+                            : message) {
+                        // now if we get an error, we can respond.
+                        if (code == Protocol.COMPRESSED_INVOCATION_MESSAGE) {
+                            int verify = input.read();
+                            if (verify != Protocol.INVOCATION_REQUEST) {
+                                throw new RuntimeException();
+                            }
 
-                            }
-                            final int invId = (input.read() << 8) | input.read();
-                            try {
-                                handleInvocationRequest(invId, input);
-                            } catch (IOException | ClassNotFoundException e) {
-                                // write response back to client
-                                writeFailedResponse(invId, e);
-                            }
                         }
-                        break;
-                    }
-                    case Protocol.OPEN_SESSION_REQUEST: {
-                        final int invId = message.readUnsignedShort();
+                        final int invId = (input.read() << 8) | input.read();
                         try {
-                            handleSessionOpenRequest(invId, message);
-                        } catch (IOException e) {
+                            handleInvocationRequest(invId, input);
+                        } catch (IOException | ClassNotFoundException e) {
                             // write response back to client
                             writeFailedResponse(invId, e);
                         }
-                        break;
                     }
-                    case Protocol.CANCEL_REQUEST: {
-                        final int invId = message.readUnsignedShort();
-                        try {
-                            handleCancelRequest(invId, message);
-                        } catch (IOException e) {
-                            // ignored
-                        }
-                        break;
+                    break;
+                }
+                case Protocol.OPEN_SESSION_REQUEST: {
+                    final int invId = message.readUnsignedShort();
+                    try {
+                        handleSessionOpenRequest(invId, message);
+                        // we've read the actual message, let's assume the information left
+                        // is to be processed by tracing
+                        SpanContext spanContext = new SpanCodec().extract(message);
+                        Iterator<Map.Entry<String, String>> iterator = spanContext.baggageItems().iterator();
+                        System.out.print(1);
+                    } catch (IOException e) {
+                        // write response back to client
+                        writeFailedResponse(invId, e);
                     }
-                    case Protocol.TXN_COMMIT_REQUEST:
-                    case Protocol.TXN_ROLLBACK_REQUEST:
-                    case Protocol.TXN_PREPARE_REQUEST:
-                    case Protocol.TXN_FORGET_REQUEST:
-                    case Protocol.TXN_BEFORE_COMPLETION_REQUEST: {
-                        final int invId = message.readUnsignedShort();
-                        try {
-                            handleTxnRequest(code, invId, message);
-                        } catch (IOException e) {
-                            // ignored
-                        }
-                        break;
+                    break;
+                }
+                case Protocol.CANCEL_REQUEST: {
+                    final int invId = message.readUnsignedShort();
+                    try {
+                        handleCancelRequest(invId, message);
+                    } catch (IOException e) {
+                        // ignored
                     }
-                    case Protocol.TXN_RECOVERY_REQUEST: {
-                        final int invId = message.readUnsignedShort();
-                        try {
-                            handleTxnRecoverRequest(invId, message);
-                        } catch (IOException e) {
-                            // ignored
-                        }
-                        break;
+                    break;
+                }
+                case Protocol.TXN_COMMIT_REQUEST:
+                case Protocol.TXN_ROLLBACK_REQUEST:
+                case Protocol.TXN_PREPARE_REQUEST:
+                case Protocol.TXN_FORGET_REQUEST:
+                case Protocol.TXN_BEFORE_COMPLETION_REQUEST: {
+                    final int invId = message.readUnsignedShort();
+                    try {
+                        handleTxnRequest(code, invId, message);
+                    } catch (IOException e) {
+                        // ignored
                     }
-                    default: {
-                        // unrecognized
-                        Logs.REMOTING.invalidMessageReceived(code);
-                        break;
+                    break;
+                }
+                case Protocol.TXN_RECOVERY_REQUEST: {
+                    final int invId = message.readUnsignedShort();
+                    try {
+                        handleTxnRecoverRequest(invId, message);
+                    } catch (IOException e) {
+                        // ignored
                     }
+                    break;
+                }
+                default: {
+                    // unrecognized
+                    Logs.REMOTING.invalidMessageReceived(code);
+                    break;
+                }
                 }
             } catch (IOException e) {
                 // nothing we can do.
@@ -286,13 +306,17 @@ final class EJBServerChannel {
             }
         }
 
-        private void handleTxnRequest(final int code, final int invId, final MessageInputStream message) throws IOException {
+        private void handleTxnRequest(final int code, final int invId, final MessageInputStream message)
+                throws IOException {
             final byte[] bytes = new byte[PackedInteger.readPackedInteger(message)];
             message.readFully(bytes);
             final TransactionID transactionID = TransactionID.createTransactionID(bytes);
-            if (transactionID instanceof XidTransactionID) try {
-                final SubordinateTransactionControl control = transactionServer.getTransactionService().getTransactionContext().findOrImportTransaction(((XidTransactionID) transactionID).getXid(), 0).getControl();
-                switch (code) {
+            if (transactionID instanceof XidTransactionID)
+                try {
+                    final SubordinateTransactionControl control = transactionServer.getTransactionService()
+                            .getTransactionContext()
+                            .findOrImportTransaction(((XidTransactionID) transactionID).getXid(), 0).getControl();
+                    switch (code) {
                     case Protocol.TXN_COMMIT_REQUEST: {
                         boolean opc = message.readBoolean();
                         control.commit(opc);
@@ -319,22 +343,28 @@ final class EJBServerChannel {
                         writeTxnResponse(invId);
                         break;
                     }
-                    default: throw Assert.impossibleSwitchCase(code);
+                    default:
+                        throw Assert.impossibleSwitchCase(code);
+                    }
+                } catch (XAException e) {
+                    writeFailedResponse(invId, e);
                 }
-            } catch (XAException e) {
-                writeFailedResponse(invId, e);
-            } else if (transactionID instanceof UserTransactionID) try {
-                final LocalTransaction localTransaction = transactionServer.removeTransaction(((UserTransactionID) transactionID).getId());
-                switch (code) {
+            else if (transactionID instanceof UserTransactionID)
+                try {
+                    final LocalTransaction localTransaction = transactionServer
+                            .removeTransaction(((UserTransactionID) transactionID).getId());
+                    switch (code) {
                     case Protocol.TXN_COMMIT_REQUEST: {
                         // Discard unused parameter
                         message.readBoolean();
-                        if (localTransaction != null) localTransaction.commit();
+                        if (localTransaction != null)
+                            localTransaction.commit();
                         writeTxnResponse(invId);
                         break;
                     }
                     case Protocol.TXN_ROLLBACK_REQUEST: {
-                        if (localTransaction != null) localTransaction.rollback();
+                        if (localTransaction != null)
+                            localTransaction.rollback();
                         writeTxnResponse(invId);
                         break;
                     }
@@ -344,14 +374,16 @@ final class EJBServerChannel {
                         writeFailedResponse(invId, Logs.TXN.userTxNotSupportedByTxContext());
                         break;
                     }
-                    default: throw Assert.impossibleSwitchCase(code);
+                    default:
+                        throw Assert.impossibleSwitchCase(code);
+                    }
+                } catch (SystemException | HeuristicMixedException | RollbackException | HeuristicRollbackException e) {
+                    writeFailedResponse(invId, e);
+                } catch (Throwable t) {
+                    // Narayana uses Errors, Exceptions, and RuntimeExceptions
+                    writeFailedResponse(invId, Logs.TXN.internalSystemErrorWithTx(t));
                 }
-            } catch (SystemException | HeuristicMixedException | RollbackException | HeuristicRollbackException e) {
-                writeFailedResponse(invId, e);
-            } catch (Throwable t) {
-                // Narayana uses Errors, Exceptions, and RuntimeExceptions
-                writeFailedResponse(invId, Logs.TXN.internalSystemErrorWithTx(t));
-            } else {
+            else {
                 throw Assert.unreachableCode();
             }
         }
@@ -361,7 +393,8 @@ final class EJBServerChannel {
             final int flags = message.readInt();
             final Xid[] xids;
             try {
-                xids = transactionServer.getTransactionService().getTransactionContext().getRecoveryInterface().recover(flags, parentName);
+                xids = transactionServer.getTransactionService().getTransactionContext().getRecoveryInterface()
+                        .recover(flags, parentName);
             } catch (XAException e) {
                 writeFailedResponse(invId, e);
                 return;
@@ -407,14 +440,12 @@ final class EJBServerChannel {
             final Connection connection = channel.getConnection();
             final EJBIdentifier identifier = new EJBIdentifier(appName, moduleName, beanName, distName);
 
-            association.receiveSessionOpenRequest(new RemotingSessionOpenRequest(
-                invId,
-                identifier,
-                transactionSupplier,
-                connection.getLocalIdentity(securityContext)));
+            association.receiveSessionOpenRequest(new RemotingSessionOpenRequest(invId, identifier, transactionSupplier,
+                    connection.getLocalIdentity(securityContext)));
         }
 
-        void handleInvocationRequest(final int invId, final InputStream input) throws IOException, ClassNotFoundException {
+        void handleInvocationRequest(final int invId, final InputStream input)
+                throws IOException, ClassNotFoundException {
             final MarshallingConfiguration configuration = EJBServerChannel.this.configuration.clone();
             final ServerClassResolver classResolver = new ServerClassResolver();
             configuration.setClassResolver(classResolver);
@@ -456,18 +487,17 @@ final class EJBServerChannel {
                 methodLocator = new EJBMethodLocator(methodName, parameterTypeNames);
                 identity = connection.getLocalIdentity();
             }
-            final RemotingInvocationRequest request = new RemotingInvocationRequest(
-                invId, identifier, methodLocator, classResolver, unmarshaller, identity
-            );
+            final RemotingInvocationRequest request = new RemotingInvocationRequest(invId, identifier, methodLocator,
+                    classResolver, unmarshaller, identity);
             InProgress value = new InProgress(request);
             invocations.put(value);
             try {
                 value.setCancelHandle(association.receiveInvocationRequest(request));
             } catch (Throwable t) {
-                //this should not happen
-                //but no harm in being defensive
+                // this should not happen
+                // but no harm in being defensive
                 Logs.INVOCATION.unexpectedException(t);
-                if(t instanceof Exception) {
+                if (t instanceof Exception) {
                     request.writeException((Exception) t);
                 } else {
                     request.writeException(new EJBException(new RuntimeException(t)));
@@ -484,7 +514,8 @@ final class EJBServerChannel {
             // remote user transaction
             final int id = input.readInt();
             final int timeout = PackedInteger.readPackedInteger(input);
-            return () -> new ImportResult<Transaction>(transactionServer.getOrBeginTransaction(id, timeout), SubordinateTransactionControl.EMPTY, false);
+            return () -> new ImportResult<Transaction>(transactionServer.getOrBeginTransaction(id, timeout),
+                    SubordinateTransactionControl.EMPTY, false);
         } else if (type == 2) {
             final int fmt = PackedInteger.readPackedInteger(input);
             final byte[] gtid = new byte[input.readUnsignedByte()];
@@ -494,7 +525,8 @@ final class EJBServerChannel {
             final int timeout = PackedInteger.readPackedInteger(input);
             return () -> {
                 try {
-                    return transactionServer.getTransactionService().getTransactionContext().findOrImportTransaction(new SimpleXid(fmt, gtid, bq), timeout);
+                    return transactionServer.getTransactionService().getTransactionContext()
+                            .findOrImportTransaction(new SimpleXid(fmt, gtid, bq), timeout);
                 } catch (XAException e) {
                     throw new SystemException(e.getMessage());
                 }
@@ -510,7 +542,8 @@ final class EJBServerChannel {
             os.writeShort(invId);
             final Marshaller marshaller = marshallerFactory.createMarshaller(configuration);
             marshaller.start(new NoFlushByteOutput(Marshalling.createByteOutput(os)));
-            marshaller.writeObject(new RequestSendFailedException(e.getMessage() + "@" + channel.getConnection().getPeerURI(), e));
+            marshaller.writeObject(
+                    new RequestSendFailedException(e.getMessage() + "@" + channel.getConnection().getPeerURI(), e));
             marshaller.writeByte(0);
             marshaller.finish();
         } catch (IOException e2) {
@@ -619,11 +652,12 @@ final class EJBServerChannel {
             }
         }
 
-        public void convertToStateful(@NotNull final SessionID sessionId) throws IllegalArgumentException, IllegalStateException {
+        public void convertToStateful(@NotNull final SessionID sessionId)
+                throws IllegalArgumentException, IllegalStateException {
             Assert.checkNotNullParam("sessionId", sessionId);
             final SessionID ourSessionId = this.sessionId;
             if (ourSessionId != null) {
-                if (! sessionId.equals(ourSessionId)) {
+                if (!sessionId.equals(ourSessionId)) {
                     throw new IllegalStateException();
                 }
             } else {
@@ -642,7 +676,8 @@ final class EJBServerChannel {
             try (MessageOutputStream os = messageTracker.openMessageUninterruptibly()) {
                 os.writeByte(Protocol.APPLICATION_EXCEPTION);
                 os.writeShort(invId);
-                if (version >= 3) os.writeByte(getEnlistmentStatus());
+                if (version >= 3)
+                    os.writeByte(getEnlistmentStatus());
                 final Marshaller marshaller = marshallerFactory.createMarshaller(configuration);
                 marshaller.start(new NoFlushByteOutput(Marshalling.createByteOutput(os)));
                 marshaller.writeObject(reason);
@@ -676,7 +711,9 @@ final class EJBServerChannel {
         final ExceptionSupplier<ImportResult<?>, SystemException> transactionSupplier;
         int txnCmd = 0; // assume nobody will ask about the transaction
 
-        RemotingSessionOpenRequest(final int invId, final EJBIdentifier identifier, final ExceptionSupplier<ImportResult<?>, SystemException> transactionSupplier, final SecurityIdentity identity) {
+        RemotingSessionOpenRequest(final int invId, final EJBIdentifier identifier,
+                final ExceptionSupplier<ImportResult<?>, SystemException> transactionSupplier,
+                final SecurityIdentity identity) {
             super(invId, identity);
             this.transactionSupplier = transactionSupplier;
             this.identifier = identifier;
@@ -717,7 +754,8 @@ final class EJBServerChannel {
             writeFailure(exception);
         }
 
-        public void convertToStateful(@NotNull final SessionID sessionId) throws IllegalArgumentException, IllegalStateException {
+        public void convertToStateful(@NotNull final SessionID sessionId)
+                throws IllegalArgumentException, IllegalStateException {
             super.convertToStateful(sessionId);
             try (MessageOutputStream os = messageTracker.openMessageUninterruptibly()) {
                 os.writeByte(Protocol.OPEN_SESSION_RESPONSE);
@@ -772,7 +810,9 @@ final class EJBServerChannel {
         final Unmarshaller remaining;
         int txnCmd = 0; // assume nobody will ask about the transaction
 
-        RemotingInvocationRequest(final int invId, final EJBIdentifier identifier, final EJBMethodLocator methodLocator, final ServerClassResolver classResolver, final Unmarshaller remaining, final SecurityIdentity identity) {
+        RemotingInvocationRequest(final int invId, final EJBIdentifier identifier, final EJBMethodLocator methodLocator,
+                final ServerClassResolver classResolver, final Unmarshaller remaining,
+                final SecurityIdentity identity) {
             super(invId, identity);
             this.identifier = identifier;
             this.methodLocator = methodLocator;
@@ -780,7 +820,8 @@ final class EJBServerChannel {
             this.remaining = remaining;
         }
 
-        public void convertToStateful(final SessionID sessionId) throws IllegalArgumentException, IllegalStateException {
+        public void convertToStateful(final SessionID sessionId)
+                throws IllegalArgumentException, IllegalStateException {
             if (version < 3) {
                 throw Logs.REMOTING.cannotAddSessionID();
             }
@@ -797,7 +838,8 @@ final class EJBServerChannel {
                 final EJBLocator<?> locator;
                 if (version >= 3) {
                     weakAffinity = unmarshaller.readObject(Affinity.class);
-                    if (weakAffinity == null) weakAffinity = Affinity.NONE;
+                    if (weakAffinity == null)
+                        weakAffinity = Affinity.NONE;
                     int flags = unmarshaller.readUnsignedByte();
                     responseCompressLevel = flags & Protocol.COMPRESS_RESPONSE;
                     transactionSupplier = readTransaction(unmarshaller);
@@ -812,23 +854,24 @@ final class EJBServerChannel {
                     assert version <= 2;
 
                     locator = unmarshaller.readObject(EJBLocator.class);
-                    // do identity checks for these strings to guarantee integrity.  can't check identifier because that class didn't exist in V2
-                    //noinspection StringEquality
-                    if (identifier.getAppName() != locator.getAppName() ||
-                        identifier.getModuleName() != locator.getModuleName() ||
-                        identifier.getBeanName() != locator.getBeanName() ||
-                        identifier.getDistinctName() != locator.getDistinctName()) {
+                    // do identity checks for these strings to guarantee integrity. can't check
+                    // identifier because that class didn't exist in V2
+                    // noinspection StringEquality
+                    if (identifier.getAppName() != locator.getAppName()
+                            || identifier.getModuleName() != locator.getModuleName()
+                            || identifier.getBeanName() != locator.getBeanName()
+                            || identifier.getDistinctName() != locator.getDistinctName()) {
 
                         throw Logs.REMOTING.mismatchedMethodLocation();
                     }
                 }
                 Object[] parameters = new Object[methodLocator.getParameterCount()];
-                for (int i = 0; i < parameters.length; i ++) {
+                for (int i = 0; i < parameters.length; i++) {
                     parameters[i] = unmarshaller.readObject();
                 }
                 int attachmentCount = PackedInteger.readPackedInteger(unmarshaller);
                 final Map<String, Object> attachments = new HashMap<>(attachmentCount);
-                for (int i = 0; i < attachmentCount; i ++) {
+                for (int i = 0; i < attachmentCount; i++) {
                     String attName = unmarshaller.readObject(String.class);
                     if (attName.equals(EJBClientInvocationContext.PRIVATE_ATTACHMENTS_KEY)) {
                         if (version <= 2) {
@@ -841,14 +884,19 @@ final class EJBServerChannel {
                                 final TransactionID transactionId = (TransactionID) transactionIdObject;
                                 // look up the transaction
                                 if (transactionId instanceof UserTransactionID) {
-                                    transactionSupplier = () -> new ImportResult<Transaction>(transactionServer.getOrBeginTransaction(
-                                            ((UserTransactionID) transactionId).getId(), ContextTransactionManager.getGlobalDefaultTransactionTimeout()),
+                                    transactionSupplier = () -> new ImportResult<Transaction>(
+                                            transactionServer.getOrBeginTransaction(
+                                                    ((UserTransactionID) transactionId).getId(),
+                                                    ContextTransactionManager.getGlobalDefaultTransactionTimeout()),
                                             SubordinateTransactionControl.EMPTY, false);
                                 } else if (transactionId instanceof XidTransactionID) {
                                     transactionSupplier = () -> {
                                         try {
-                                            return transactionServer.getTransactionService().getTransactionContext().findOrImportTransaction(
-                                                    ((XidTransactionID) transactionId).getXid(), ContextTransactionManager.getGlobalDefaultTransactionTimeout());
+                                            return transactionServer.getTransactionService().getTransactionContext()
+                                                    .findOrImportTransaction(
+                                                            ((XidTransactionID) transactionId).getXid(),
+                                                            ContextTransactionManager
+                                                                    .getGlobalDefaultTransactionTimeout());
                                         } catch (XAException e) {
                                             throw new SystemException(e.getMessage());
                                         }
@@ -859,37 +907,40 @@ final class EJBServerChannel {
                             }
                             weakAffinity = (Affinity) map.getOrDefault(AttachmentKeys.WEAK_AFFINITY, weakAffinity);
 
-
                         } else {
                             // discard content for v3
                             unmarshaller.readObject();
                         }
                     } else {
                         final Object value = unmarshaller.readObject();
-                        if (value != null) attachments.put(attName, value);
+                        if (value != null)
+                            attachments.put(attName, value);
                     }
                 }
                 attachments.put(EJBClient.SOURCE_ADDRESS_KEY, channel.getConnection().getPeerAddress());
 
                 final ExceptionSupplier<ImportResult<?>, SystemException> finalTransactionSupplier = transactionSupplier;
 
-                if(version == 2) {
-                    //version 2 did not send compression information in the response stream
-                    //instead it must be read from the class
+                if (version == 2) {
+                    // version 2 did not send compression information in the response stream
+                    // instead it must be read from the class
                     Method invokedMethod = findMethod(locator.getViewType(), methodLocator);
-                    CompressionHint compressionHint = invokedMethod == null ? null : invokedMethod.getAnnotation(CompressionHint.class);
+                    CompressionHint compressionHint = invokedMethod == null ? null
+                            : invokedMethod.getAnnotation(CompressionHint.class);
                     // then class level
                     if (compressionHint == null) {
-                        compressionHint = invokedMethod == null ? null : invokedMethod.getDeclaringClass().getAnnotation(CompressionHint.class);
+                        compressionHint = invokedMethod == null ? null
+                                : invokedMethod.getDeclaringClass().getAnnotation(CompressionHint.class);
                     }
-                    if(compressionHint != null) {
-                        if(compressionHint.compressResponse()) {
+                    if (compressionHint != null) {
+                        if (compressionHint.compressResponse()) {
                             responseCompressLevel = compressionHint.compressionLevel();
                         }
                     }
                 }
 
-                final int finalResponseCompressLevel = responseCompressLevel == 15 ? Deflater.DEFAULT_COMPRESSION : min(responseCompressLevel, 9);
+                final int finalResponseCompressLevel = responseCompressLevel == 15 ? Deflater.DEFAULT_COMPRESSION
+                        : min(responseCompressLevel, 9);
                 return new Resolved() {
 
                     @NotNull
@@ -930,9 +981,10 @@ final class EJBServerChannel {
                     public void writeInvocationResult(final Object result) {
                         MessageOutputStream os;
                         try (MessageOutputStream underlying = messageTracker.openMessageUninterruptibly()) {
-                            if(finalResponseCompressLevel != 0) {
+                            if (finalResponseCompressLevel != 0) {
                                 underlying.writeByte(Protocol.COMPRESSED_INVOCATION_MESSAGE);
-                                os = new WrapperMessageOutputStream(underlying, new DeflaterOutputStream(underlying, new Deflater(finalResponseCompressLevel)));
+                                os = new WrapperMessageOutputStream(underlying,
+                                        new DeflaterOutputStream(underlying, new Deflater(finalResponseCompressLevel)));
                             } else {
                                 os = underlying;
                             }
@@ -988,7 +1040,7 @@ final class EJBServerChannel {
                                 for (Map.Entry<String, Object> entry : attachments.entrySet()) {
                                     marshaller.writeObject(entry.getKey());
                                     marshaller.writeObject(entry.getValue());
-                                    if (i ++ == 255) {
+                                    if (i++ == 255) {
                                         break;
                                     }
                                 }
@@ -1011,8 +1063,8 @@ final class EJBServerChannel {
 
         @Override
         public void writeProceedAsync() {
-            if(version >= 3) {
-                //not used in newer protocols
+            if (version >= 3) {
+                // not used in newer protocols
                 return;
             }
             try (MessageOutputStream os = messageTracker.openMessageUninterruptibly()) {
@@ -1071,15 +1123,17 @@ final class EJBServerChannel {
         }
 
         void writeCancellation() {
-            if (version >= 3) try (MessageOutputStream os = messageTracker.openMessageUninterruptibly()) {
-                os.writeByte(Protocol.CANCEL_RESPONSE);
-                os.writeShort(invId);
-            } catch (IOException e) {
-                // nothing to do at this point; the client doesn't want the response
-                Logs.REMOTING.trace("EJB response write failed", e);
-            } finally {
-                invocations.removeKey(invId);
-            } else {
+            if (version >= 3)
+                try (MessageOutputStream os = messageTracker.openMessageUninterruptibly()) {
+                    os.writeByte(Protocol.CANCEL_RESPONSE);
+                    os.writeShort(invId);
+                } catch (IOException e) {
+                    // nothing to do at this point; the client doesn't want the response
+                    Logs.REMOTING.trace("EJB response write failed", e);
+                } finally {
+                    invocations.removeKey(invId);
+                }
+            else {
                 writeFailure(Logs.REMOTING.requestCancelled());
             }
         }
@@ -1128,7 +1182,7 @@ final class EJBServerChannel {
 
         synchronized void setCancelHandle(CancelHandle cancelHandle) {
             this.cancelHandle = cancelHandle;
-            if(cancelled) {
+            if (cancelled) {
                 cancelHandle.cancel(aggressive);
             }
         }
@@ -1136,7 +1190,7 @@ final class EJBServerChannel {
         synchronized void cancel(boolean aggressive) {
             this.cancelled = true;
             this.aggressive = aggressive;
-            if(cancelHandle != null) {
+            if (cancelHandle != null) {
                 cancelHandle.cancel(aggressive);
             }
         }
@@ -1149,11 +1203,12 @@ final class EJBServerChannel {
             super(true);
         }
 
-        public Class<?> resolveProxyClass(final Unmarshaller unmarshaller, final String[] interfaces) throws IOException, ClassNotFoundException {
+        public Class<?> resolveProxyClass(final Unmarshaller unmarshaller, final String[] interfaces)
+                throws IOException, ClassNotFoundException {
             final int length = interfaces.length;
             final Class<?>[] classes = new Class<?>[length];
 
-            for(int i = 0; i < length; ++i) {
+            for (int i = 0; i < length; ++i) {
                 classes[i] = this.loadClass(interfaces[i]);
             }
 
