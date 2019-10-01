@@ -105,7 +105,11 @@ import org.wildfly.transaction.client.SimpleXid;
 import org.wildfly.transaction.client.provider.remoting.RemotingTransactionServer;
 import org.wildfly.transaction.client.spi.SubordinateTransactionControl;
 
+import io.opentracing.Scope;
+import io.opentracing.Span;
 import io.opentracing.SpanContext;
+import io.opentracing.Tracer;
+import io.opentracing.Tracer.SpanBuilder;
 import io.opentracing.propagation.Binary;
 import io.opentracing.propagation.BinaryAdapters;
 import io.opentracing.propagation.Format;
@@ -230,8 +234,13 @@ final class EJBServerChannel {
                         // we've read the actual message, let's assume the information left
                         // is to be processed by tracing
                         SpanContext spanContext = new SpanCodec().extract(message);
-                        Iterator<Map.Entry<String, String>> iterator = spanContext.baggageItems().iterator();
-                        System.out.print(1);
+                        Tracer t = GlobalTracer.get();
+                        Span span = GlobalTracer.get().buildSpan("FOOBAR").asChildOf(spanContext).start();
+                        try(Scope _s = GlobalTracer.get().activateSpan(span)) {
+                            // noop
+                        } finally {
+                            span.finish();
+                        }
                     } catch (IOException e) {
                         // write response back to client
                         writeFailedResponse(invId, e);

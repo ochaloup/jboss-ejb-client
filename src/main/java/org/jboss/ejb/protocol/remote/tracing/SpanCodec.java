@@ -116,8 +116,8 @@ public class SpanCodec {
         writeLong(stream, spanContext.getSpanId());
         writeLong(stream, spanContext.getParentId());
 
-        // Write the flags (byte)
-        stream.write(spanContext.getFlags());
+        // Write the flags (byte), write one to indicate that we wish to report this span
+        stream.write(1);
 
         // write the baggage count.
         writeInt(stream, spanContext.baggageCount());
@@ -140,7 +140,10 @@ public class SpanCodec {
         long traceIdLow = buf.readLong();
         long spanId = buf.readLong();
         long parentId = buf.readLong();
+        // TODO this is broken and only zero is read back, force the 1 to indicate we wish
+        // to report the span
         byte flags = buf.readByte();
+        flags = 1;
         int count = buf.readInt();
 
         // This is optimized to reduce allocations. A decent

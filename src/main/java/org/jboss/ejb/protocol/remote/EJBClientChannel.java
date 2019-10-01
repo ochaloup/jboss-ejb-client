@@ -122,6 +122,7 @@ import org.xnio.IoFuture;
 import io.jaegertracing.internal.JaegerSpanContext;
 import io.narayana.tracing.SpanName;
 import io.narayana.tracing.Tracing;
+import io.opentracing.Scope;
 import io.opentracing.Span;
 import io.opentracing.propagation.Binary;
 import io.opentracing.propagation.BinaryAdapters;
@@ -750,13 +751,14 @@ class EJBClientChannel {
             throws Exception {
         SessionOpenInvocation<T> invocation = invocationTracker
                 .addInvocation(id -> new SessionOpenInvocation<>(id, statelessLocator, clientInvocationContext));
-        try (MessageOutputStream out = invocationTracker.allocateMessage()) {
+        Span s = GlobalTracer.get().buildSpan("REMOTING-TEST").start();
+        try (Scope _s = GlobalTracer.get().activateSpan(s); MessageOutputStream out = invocationTracker.allocateMessage()) {
             out.write(Protocol.OPEN_SESSION_REQUEST);
             out.writeShort(invocation.getIndex());
             writeRawIdentifier(statelessLocator, out);
             if (version >= 3) {
                 out.writeInt(identity.getId());
-                new SpanCodec().inject((JaegerSpanContext)GlobalTracer.get().buildSpan("REMOTING-TEST").start().context(), out);
+                new SpanCodec().inject((JaegerSpanContext)s.context(), out);
                 invocation.setOutflowHandle(writeTransaction(clientInvocationContext.getTransaction(), out,
                         clientInvocationContext.getAuthenticationContext()));
             }
@@ -764,6 +766,8 @@ class EJBClientChannel {
             CreateException createException = new CreateException(e.getMessage());
             createException.initCause(e);
             throw createException;
+        } finally {
+            s.finish();
         }
         // await the response
         return invocation.getResult();
