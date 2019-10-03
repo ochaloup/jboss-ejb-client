@@ -1,5 +1,6 @@
 package org.jboss.ejb.protocol.remote.tracing;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -117,7 +118,7 @@ public class SpanCodec {
         writeLong(stream, spanContext.getParentId());
 
         // Write the flags (byte), write one to indicate that we wish to report this span
-        stream.write(1);
+        stream.write(spanContext.getFlags());
 
         // write the baggage count.
         writeInt(stream, spanContext.baggageCount());
@@ -130,26 +131,36 @@ public class SpanCodec {
         // Now we have a stream and a size, and we'll copy it into the byte
         // buffer.
         int size = stream.size();
+        
         carrier.write(stream.toByteArray(), 0, size);
     }
 
     public JaegerSpanContext extract(MessageInputStream buf) throws IOException {
         Map<String, String> baggage = null;
-
-        long traceIdHigh = buf.readLong();
+        // drain the seven bytes (should be eight so we need to start from the next reachable
+        // data
+        byte[] bu = new byte[7];
+        int in = 0;
+        while(in < 7) {
+            byte b = (byte) buf.read();
+            bu[in++] = b;
+        }
+        
+        // this piece of data is missing (the MSB is not read and lost somewhere)
+        //long traceIdHigh = buf.readLong();
         long traceIdLow = buf.readLong();
         long spanId = buf.readLong();
         long parentId = buf.readLong();
         // TODO this is broken and only zero is read back, force the 1 to indicate we wish
         // to report the span
         byte flags = buf.readByte();
-        flags = 1;
+        //flags = 1;
         int count = buf.readInt();
 
         // This is optimized to reduce allocations. A decent
         // buffer is allocated to read strings, and reused for
         // keys and values. It will be expanded as necessary.
-        if (false && count > 0) {
+        if (count > 0) {
             baggage = new HashMap<String, String>(count);
             // Choose a size that we guess would fit most baggage k/v lengths.
             byte[] tmp = new byte[32];
@@ -169,7 +180,7 @@ public class SpanCodec {
             }
         }
 
-        return objectFactory.createSpanContext(traceIdHigh, traceIdLow, spanId, parentId, flags, baggage, null);
+        return objectFactory.createSpanContext(0, traceIdLow, spanId, parentId, flags, baggage, null);
     }
 
     @Override
