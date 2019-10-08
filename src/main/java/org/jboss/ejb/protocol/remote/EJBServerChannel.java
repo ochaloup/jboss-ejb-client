@@ -32,15 +32,11 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.net.Inet6Address;
 import java.net.SocketAddress;
-import java.nio.ByteBuffer;
-import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.security.PrivilegedAction;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.concurrent.Executor;
 import java.util.zip.Deflater;
 import java.util.zip.DeflaterOutputStream;
@@ -109,10 +105,6 @@ import io.opentracing.Scope;
 import io.opentracing.Span;
 import io.opentracing.SpanContext;
 import io.opentracing.Tracer;
-import io.opentracing.Tracer.SpanBuilder;
-import io.opentracing.propagation.Binary;
-import io.opentracing.propagation.BinaryAdapters;
-import io.opentracing.propagation.Format;
 import io.opentracing.util.GlobalTracer;
 
 /**

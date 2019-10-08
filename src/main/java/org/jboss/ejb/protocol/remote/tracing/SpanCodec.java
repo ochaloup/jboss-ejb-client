@@ -1,10 +1,7 @@
 package org.jboss.ejb.protocol.remote.tracing;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.charset.Charset;
 import java.util.HashMap;
 import java.util.Map;
@@ -14,7 +11,6 @@ import org.jboss.remoting3.MessageOutputStream;
 
 import io.jaegertracing.internal.JaegerObjectFactory;
 import io.jaegertracing.internal.JaegerSpanContext;
-import io.opentracing.propagation.Binary;
 
 public class SpanCodec {
     /**
