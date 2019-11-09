@@ -1,11 +1,13 @@
 package org.jboss.ejb.protocol.remote.tracing;
 
 import java.io.ByteArrayOutputStream;
+import java.io.DataInput;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.jboss.marshalling.Unmarshaller;
 import org.jboss.remoting3.MessageInputStream;
 import org.jboss.remoting3.MessageOutputStream;
 
@@ -131,14 +133,14 @@ public class SpanCodec {
         carrier.write(stream.toByteArray(), 0, size);
     }
 
-    public JaegerSpanContext extract(MessageInputStream buf) throws IOException {
+    public JaegerSpanContext extract(Unmarshaller buf) throws IOException {
         Map<String, String> baggage = null;
         // drain the seven bytes (should be eight so we need to start from the next reachable
         // data
         byte[] bu = new byte[7];
         int in = 0;
         while(in < 7) {
-            byte b = (byte) buf.read();
+            byte b = buf.readByte();
             bu[in++] = b;
         }
         
@@ -164,12 +166,12 @@ public class SpanCodec {
             for (int i = 0; i < count; i++) {
                 int len = buf.readInt();
                 tmp = checkBuf(len, tmp);
-                buf.read(tmp, 0, len);
+                buf.readFully(tmp, 0, len);
                 final String key = new String(tmp, 0, len, DEFAULT_CHARSET);
 
                 len = buf.readInt();
                 tmp = checkBuf(len, tmp);
-                buf.read(tmp, 0, len);
+                buf.readFully(tmp, 0, len);
                 final String value = new String(tmp, 0, len, DEFAULT_CHARSET);
 
                 baggage.put(key, value);

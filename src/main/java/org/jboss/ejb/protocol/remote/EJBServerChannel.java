@@ -34,9 +34,12 @@ import java.net.Inet6Address;
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.PrivilegedAction;
+import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.concurrent.Executor;
 import java.util.zip.Deflater;
 import java.util.zip.DeflaterOutputStream;
@@ -100,12 +103,6 @@ import org.wildfly.transaction.client.LocalTransaction;
 import org.wildfly.transaction.client.SimpleXid;
 import org.wildfly.transaction.client.provider.remoting.RemotingTransactionServer;
 import org.wildfly.transaction.client.spi.SubordinateTransactionControl;
-
-import io.opentracing.Scope;
-import io.opentracing.Span;
-import io.opentracing.SpanContext;
-import io.opentracing.Tracer;
-import io.opentracing.util.GlobalTracer;
 
 /**
  * @author <a href="mailto:david.lloyd@redhat.com">David M. Lloyd</a>
@@ -223,16 +220,6 @@ final class EJBServerChannel {
                     final int invId = message.readUnsignedShort();
                     try {
                         handleSessionOpenRequest(invId, message);
-                        // we've read the actual message, let's assume the information left
-                        // is to be processed by tracing
-                        SpanContext spanContext = new SpanCodec().extract(message);
-                        Tracer t = GlobalTracer.get();
-                        Span span = GlobalTracer.get().buildSpan("FOOBAR").asChildOf(spanContext).start();
-                        try(Scope _s = GlobalTracer.get().activateSpan(span)) {
-                            // noop
-                        } finally {
-                            span.finish();
-                        }
                     } catch (IOException e) {
                         // write response back to client
                         writeFailedResponse(invId, e);
@@ -521,6 +508,11 @@ final class EJBServerChannel {
             final int fmt = PackedInteger.readPackedInteger(input);
             final byte[] gtid = new byte[input.readUnsignedByte()];
             input.readFully(gtid);
+
+            //SpanContext spanContext = new SpanCodec().extract(input);
+            //Tracing.activateSpan(new Tracing.DefaultSpanBuilder(SpanName.SUBORD_ROOT)
+            //        .buildSubordinateIfAbsent(new String(gtid), spanContext));
+
             final byte[] bq = new byte[input.readUnsignedByte()];
             input.readFully(bq);
             final int timeout = PackedInteger.readPackedInteger(input);
@@ -914,12 +906,12 @@ final class EJBServerChannel {
                         }
                     } else {
                         final Object value = unmarshaller.readObject();
-                        if (value != null)
+                        if (value != null) {
                             attachments.put(attName, value);
+                        }
                     }
                 }
                 attachments.put(EJBClient.SOURCE_ADDRESS_KEY, channel.getConnection().getPeerAddress());
-
                 final ExceptionSupplier<ImportResult<?>, SystemException> finalTransactionSupplier = transactionSupplier;
 
                 if (version == 2) {

@@ -33,6 +33,8 @@ import org.wildfly.transaction.client.ContextTransactionManager;
 import org.wildfly.transaction.client.LocalTransaction;
 import org.wildfly.transaction.client.RemoteTransaction;
 
+import io.narayana.tracing.Tracing;
+
 /**
  * The client interceptor which associates the current transaction with the
  * invocation. Additionally, it influences discovery to "stick"
@@ -105,6 +107,7 @@ public final class TransactionInterceptor implements EJBClientInterceptor {
         try {
             return context.proceed();
         } finally {
+            Tracing.finish(transaction.toString());
             transactionManager.resume(old);
         }
     }

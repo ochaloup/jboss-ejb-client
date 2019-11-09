@@ -35,10 +35,7 @@ import java.io.UnsupportedEncodingException;
 import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.net.URI;
-import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
 import java.nio.channels.ClosedChannelException;
-import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.security.PrivilegedActionException;
@@ -85,7 +82,6 @@ import org.jboss.ejb.client.StatelessEJBLocator;
 import org.jboss.ejb.client.TransactionID;
 import org.jboss.ejb.client.UserTransactionID;
 import org.jboss.ejb.client.XidTransactionID;
-import org.jboss.ejb.protocol.remote.tracing.SpanCodec;
 import org.jboss.marshalling.ByteInput;
 import org.jboss.marshalling.Marshaller;
 import org.jboss.marshalling.MarshallerFactory;
@@ -119,15 +115,12 @@ import org.xnio.Cancellable;
 import org.xnio.FutureResult;
 import org.xnio.IoFuture;
 
-import io.jaegertracing.internal.JaegerSpanContext;
-import io.narayana.tracing.SpanName;
-import io.narayana.tracing.Tracing;
-import io.opentracing.Scope;
+import io.narayana.tracing.names.SpanName;
+import io.narayana.tracing.TracingUtils;
+import io.narayana.tracing.DefaultSpanBuilder;
+import io.narayana.tracing.registry.RegistryType;
+import io.narayana.tracing.registry.SpanRegistry;
 import io.opentracing.Span;
-import io.opentracing.propagation.Binary;
-import io.opentracing.propagation.BinaryAdapters;
-import io.opentracing.propagation.Format;
-import io.opentracing.util.GlobalTracer;
 
 /**
  * @author <a href="mailto:david.lloyd@redhat.com">David M. Lloyd</a>
@@ -215,6 +208,9 @@ class EJBClientChannel {
             case Protocol.PROCEED_ASYNC_RESPONSE: {
                 final int invId = message.readUnsignedShort();
                 leaveOpen = invocationTracker.signalResponse(invId, msg, message, false);
+                if(msg == Protocol.INVOCATION_RESPONSE || msg == Protocol.APPLICATION_EXCEPTION) {
+                    REGISTRY.remove(Integer.toString(invId)).finish();
+                }
                 break;
             }
             case Protocol.COMPRESSED_INVOCATION_MESSAGE: {
@@ -362,12 +358,19 @@ class EJBClientChannel {
     }
 
     private static final AttachmentKey<MethodInvocation> INV_KEY = new AttachmentKey<>();
+    private static final Map<String, Span> REGISTRY = new HashMap<>();
 
     public void processInvocation(final EJBReceiverInvocationContext receiverContext,
             final ConnectionPeerIdentity peerIdentity) {
         MethodInvocation invocation = invocationTracker.addInvocation(id -> new MethodInvocation(id, receiverContext));
         final EJBClientInvocationContext invocationContext = receiverContext.getClientInvocationContext();
         invocationContext.putAttachment(INV_KEY, invocation);
+
+        Span span = new DefaultSpanBuilder(SpanName.SUBORD_ROOT).build(Integer.toString(invocation.getIndex()));
+        SpanRegistry.insert(RegistryType.SPAN_CTXT_PROPAGATION, Integer.toString(invocation.getIndex()), span);
+        TracingUtils.activateSpan(span);
+
+        invocationContext.putAttachment(Keys.SPAN_CONTEXT_ATTACHMENT_KEY, span.context());
         final EJBLocator<?> locator = invocationContext.getLocator();
         final int peerIdentityId;
         if (version >= 3) {
@@ -387,20 +390,7 @@ class EJBClientChannel {
                 final Method invokedMethod = invocationContext.getInvokedMethod();
                 final Object[] parameters = invocationContext.getParameters();
 
-                if (version < 3) {
-                    // method name as UTF string
-                    out.writeUTF(invokedMethod.getName());
-
-                    // write the method signature as UTF string
-                    out.writeUTF(invocationContext.getMethodSignatureString());
-
-                    // protocol 1 & 2 redundant locator objects
-                    marshaller.writeObject(locator.getAppName());
-                    marshaller.writeObject(locator.getModuleName());
-                    marshaller.writeObject(locator.getDistinctName());
-                    marshaller.writeObject(locator.getBeanName());
-                } else {
-
+                if (version >= 3) {
                     // write identifier to allow the peer to find the class loader
                     marshaller.writeObject(locator.getIdentifier());
 
@@ -426,6 +416,18 @@ class EJBClientChannel {
                     // write txn context
                     invocation.setOutflowHandle(writeTransaction(invocationContext.getTransaction(), marshaller,
                             invocationContext.getAuthenticationContext()));
+                } else {
+                    // method name as UTF string
+                    out.writeUTF(invokedMethod.getName());
+
+                    // write the method signature as UTF string
+                    out.writeUTF(invocationContext.getMethodSignatureString());
+
+                    // protocol 1 & 2 redundant locator objects
+                    marshaller.writeObject(locator.getAppName());
+                    marshaller.writeObject(locator.getModuleName());
+                    marshaller.writeObject(locator.getDistinctName());
+                    marshaller.writeObject(locator.getBeanName());
                 }
                 // write the invocation locator itself
                 marshaller.writeObject(locator);
@@ -751,14 +753,12 @@ class EJBClientChannel {
             throws Exception {
         SessionOpenInvocation<T> invocation = invocationTracker
                 .addInvocation(id -> new SessionOpenInvocation<>(id, statelessLocator, clientInvocationContext));
-        Span s = GlobalTracer.get().buildSpan("REMOTING-TEST").start();
-        try (Scope _s = GlobalTracer.get().activateSpan(s); MessageOutputStream out = invocationTracker.allocateMessage()) {
+        try (MessageOutputStream out = invocationTracker.allocateMessage()) {
             out.write(Protocol.OPEN_SESSION_REQUEST);
             out.writeShort(invocation.getIndex());
             writeRawIdentifier(statelessLocator, out);
             if (version >= 3) {
                 out.writeInt(identity.getId());
-                new SpanCodec().inject((JaegerSpanContext)s.context(), out);
                 invocation.setOutflowHandle(writeTransaction(clientInvocationContext.getTransaction(), out,
                         clientInvocationContext.getAuthenticationContext()));
             }
@@ -766,8 +766,6 @@ class EJBClientChannel {
             CreateException createException = new CreateException(e.getMessage());
             createException.initCause(e);
             throw createException;
-        } finally {
-            s.finish();
         }
         // await the response
         return invocation.getResult();

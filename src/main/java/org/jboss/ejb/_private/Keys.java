@@ -21,10 +21,13 @@ package org.jboss.ejb._private;
 import org.jboss.ejb.client.AttachmentKey;
 import org.wildfly.naming.client.NamingProvider;
 
+import io.opentracing.SpanContext;
+
 /**
  */
 public final class Keys {
     public static final AttachmentKey<NamingProvider> NAMING_PROVIDER_ATTACHMENT_KEY = new AttachmentKey<>();
+    public static final AttachmentKey<SpanContext> SPAN_CONTEXT_ATTACHMENT_KEY = new AttachmentKey<>();
 
     private Keys() {}
 }
