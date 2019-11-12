@@ -71,7 +71,6 @@ import org.jboss.ejb.client.TransactionID;
 import org.jboss.ejb.client.UserTransactionID;
 import org.jboss.ejb.client.XidTransactionID;
 import org.jboss.ejb.client.annotation.CompressionHint;
-import org.jboss.ejb.protocol.remote.tracing.SpanCodec;
 import org.jboss.ejb.server.Association;
 import org.jboss.ejb.server.CancelHandle;
 import org.jboss.ejb.server.ClusterTopologyListener;
@@ -508,10 +507,6 @@ final class EJBServerChannel {
             final int fmt = PackedInteger.readPackedInteger(input);
             final byte[] gtid = new byte[input.readUnsignedByte()];
             input.readFully(gtid);
-
-            //SpanContext spanContext = new SpanCodec().extract(input);
-            //Tracing.activateSpan(new Tracing.DefaultSpanBuilder(SpanName.SUBORD_ROOT)
-            //        .buildSubordinateIfAbsent(new String(gtid), spanContext));
 
             final byte[] bq = new byte[input.readUnsignedByte()];
             input.readFully(bq);

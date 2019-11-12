@@ -115,12 +115,8 @@ import org.xnio.Cancellable;
 import org.xnio.FutureResult;
 import org.xnio.IoFuture;
 
-import io.narayana.tracing.names.SpanName;
-import io.narayana.tracing.TracingUtils;
-import io.narayana.tracing.DefaultSpanBuilder;
-import io.narayana.tracing.registry.RegistryType;
-import io.narayana.tracing.registry.SpanRegistry;
 import io.opentracing.Span;
+import io.opentracing.util.GlobalTracer;
 
 /**
  * @author <a href="mailto:david.lloyd@redhat.com">David M. Lloyd</a>
@@ -208,8 +204,8 @@ class EJBClientChannel {
             case Protocol.PROCEED_ASYNC_RESPONSE: {
                 final int invId = message.readUnsignedShort();
                 leaveOpen = invocationTracker.signalResponse(invId, msg, message, false);
-                if(msg == Protocol.INVOCATION_RESPONSE || msg == Protocol.APPLICATION_EXCEPTION) {
-                    REGISTRY.remove(Integer.toString(invId)).finish();
+                if (msg == Protocol.INVOCATION_RESPONSE || msg == Protocol.APPLICATION_EXCEPTION) {
+                    SPAN_REGISTRY.remove(Integer.toString(invId)).finish();
                 }
                 break;
             }
@@ -358,19 +354,18 @@ class EJBClientChannel {
     }
 
     private static final AttachmentKey<MethodInvocation> INV_KEY = new AttachmentKey<>();
-    private static final Map<String, Span> REGISTRY = new HashMap<>();
-
+    private static final Map<String, Span> SPAN_REGISTRY = new HashMap<>();
+    
     public void processInvocation(final EJBReceiverInvocationContext receiverContext,
             final ConnectionPeerIdentity peerIdentity) {
         MethodInvocation invocation = invocationTracker.addInvocation(id -> new MethodInvocation(id, receiverContext));
         final EJBClientInvocationContext invocationContext = receiverContext.getClientInvocationContext();
         invocationContext.putAttachment(INV_KEY, invocation);
 
-        Span span = new DefaultSpanBuilder(SpanName.SUBORD_ROOT).build(Integer.toString(invocation.getIndex()));
-        SpanRegistry.insert(RegistryType.SPAN_CTXT_PROPAGATION, Integer.toString(invocation.getIndex()), span);
-        TracingUtils.activateSpan(span);
-
+        Span span = GlobalTracer.get().activeSpan();
+        SPAN_REGISTRY.put(Integer.toString(invocation.getIndex()), span);
         invocationContext.putAttachment(Keys.SPAN_CONTEXT_ATTACHMENT_KEY, span.context());
+        
         final EJBLocator<?> locator = invocationContext.getLocator();
         final int peerIdentityId;
         if (version >= 3) {

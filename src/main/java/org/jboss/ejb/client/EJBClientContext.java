@@ -125,11 +125,11 @@ public final class EJBClientContext extends Attachable implements Contextual<EJB
 
     static final InterceptorList defaultInterceptors = new InterceptorList(new EJBClientInterceptorInformation[] {
         EJBClientInterceptorInformation.forClass(TransactionInterceptor.class),
-       // EJBClientInterceptorInformation.forClass(TracingInterceptor.class),
         EJBClientInterceptorInformation.forClass(NamingEJBClientInterceptor.class),
         EJBClientInterceptorInformation.forClass(DiscoveryEJBClientInterceptor.class),
         EJBClientInterceptorInformation.forClass(TransactionPostDiscoveryInterceptor.class),
         EJBClientInterceptorInformation.forClass(RemotingEJBClientInterceptor.class),
+        EJBClientInterceptorInformation.forClass(TracingInterceptor.class)
     });
 
     private final InterceptorList classPathInterceptors;

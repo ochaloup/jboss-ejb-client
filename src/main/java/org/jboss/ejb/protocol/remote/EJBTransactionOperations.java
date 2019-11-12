@@ -40,9 +40,6 @@ import org.jboss.remoting3.util.StreamUtils;
 import org.wildfly.transaction.client.provider.remoting.RemotingOperations;
 import org.wildfly.transaction.client.spi.SimpleTransactionControl;
 
-import io.opentracing.Span;
-import io.opentracing.util.GlobalTracer;
-
 /**
  * @author <a href="mailto:david.lloyd@redhat.com">David M. Lloyd</a>
  */
@@ -76,7 +73,6 @@ class EJBTransactionOperations implements RemotingOperations {
 
     public int prepare(final Xid xid, final ConnectionPeerIdentity peerIdentity) throws XAException {
         assert peerIdentity.getId() == 0;
-        Span span = GlobalTracer.get().activeSpan();
         return executeSimpleInvocation(new XidTransactionID(xid), Protocol.TXN_PREPARE_REQUEST, true, false, false);
     }
 
