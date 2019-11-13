@@ -14,6 +14,7 @@ public class TracingInterceptor implements EJBClientInterceptor {
     public void handleInvocation(EJBClientInvocationContext context) throws Exception {
         Collection<URI> attachment = context.getAttachment(TransactionInterceptor.PREFERRED_DESTINATIONS);
         System.out.println(attachment);
+        context.sendRequest();
 //        SpanContext spanContext = (SpanContext) value;
 //        try {
 //            Object txn = transactionSupplier.get().getTransaction();

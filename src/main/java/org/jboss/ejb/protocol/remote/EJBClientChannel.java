@@ -364,7 +364,7 @@ class EJBClientChannel {
 
         Span span = GlobalTracer.get().activeSpan();
         SPAN_REGISTRY.put(Integer.toString(invocation.getIndex()), span);
-        invocationContext.putAttachment(Keys.SPAN_CONTEXT_ATTACHMENT_KEY, span.context());
+        invocationContext.putAttachment(new AttachmentKey<String>(), "dummy string which should be replaced by a span context in the nearest future possible!");
         
         final EJBLocator<?> locator = invocationContext.getLocator();
         final int peerIdentityId;
