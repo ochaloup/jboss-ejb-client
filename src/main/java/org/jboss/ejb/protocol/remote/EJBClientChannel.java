@@ -205,7 +205,10 @@ class EJBClientChannel {
                 final int invId = message.readUnsignedShort();
                 leaveOpen = invocationTracker.signalResponse(invId, msg, message, false);
                 if (msg == Protocol.INVOCATION_RESPONSE || msg == Protocol.APPLICATION_EXCEPTION) {
-                    SPAN_REGISTRY.remove(Integer.toString(invId)).finish();
+                    Span span = SPAN_REGISTRY.remove(Integer.toString(invId));
+                    if(span != null) {
+                        span.finish();
+                    }
                 }
                 break;
             }
