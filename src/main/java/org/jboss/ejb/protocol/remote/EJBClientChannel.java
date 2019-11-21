@@ -146,6 +146,8 @@ class EJBClientChannel {
 
     EJBClientChannel(final Channel channel, final int version, final DiscoveredNodeRegistry discoveredNodeRegistry,
             final FutureResult<EJBClientChannel> futureResult, RetryExecutorWrapper retryExecutorWrapper) {
+        Logs.INVOCATION.info("EjbClientChannel#<init> span: " + GlobalTracer.get().activeSpan());
+
         this.channel = channel;
         this.version = version;
         this.discoveredNodeRegistry = discoveredNodeRegistry;
@@ -366,6 +368,7 @@ class EJBClientChannel {
         invocationContext.putAttachment(INV_KEY, invocation);
 
         Span span = GlobalTracer.get().activeSpan();
+        Logs.INVOCATION.info("EjbClientChannel#processInvocation span: " + span);
         SPAN_REGISTRY.put(Integer.toString(invocation.getIndex()), span);
         invocationContext.putAttachment(new AttachmentKey<String>(), "dummy string which should be replaced by a span context in the nearest future possible!");
         
